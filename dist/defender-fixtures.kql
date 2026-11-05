@@ -1,0 +1,75 @@
+let EntraIdSignInEvents = datatable(Age:long, AccountObjectId:string, RiskLevelDuringSignIn:int, ErrorCode:int, IPAddress:string, CorrelationId:string)[
+    60, '00000000-0000-0000-0000-00000000044d', 50, 0, '192.0.2.10', 'c0',
+    60, '00000000-0000-0000-0000-00000000044e', 50, 0, '192.0.2.10', 'c1',
+    60, '00000000-0000-0000-0000-00000000044f', 50, 0, '192.0.2.10', 'c2',
+    60, '00000000-0000-0000-0000-000000000450', 50, 0, '192.0.2.10', 'c3',
+    60, '00000000-0000-0000-0000-000000000451', 50, 0, '192.0.2.10', 'c4',
+    60, '00000000-0000-0000-0000-000000000452', 50, 50126, '192.0.2.10', 'c5',
+    60, '00000000-0000-0000-0000-000000000453', 50, 0, '192.0.2.10', 'c6',
+    60, '00000000-0000-0000-0000-000000000454', 50, 0, '192.0.2.10', 'c7',
+    5, '00000000-0000-0000-0000-000000000455', 50, 0, '192.0.2.10', 'c8'
+] | extend Timestamp=now()-Age*1m;
+let CloudAppEvents = datatable(Age:long, AccountObjectId:string, ReportId:string, ActionType:string, RawEventData:dynamic)[
+    10, '00000000-0000-0000-0000-00000000044d', 'd1', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-00000000044d"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\": \"old\"}, {\"Id\": \"new\"}]"}]}),
+    10, '00000000-0000-0000-0000-00000000044e', 'd2', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-00000000044e"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\":\"replacement\"}]"}]}),
+    10, '00000000-0000-0000-0000-00000000044f', 'd3', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-00000000044f"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\":\"old\",\"DeviceName\":\"renamed\"}]"}]}),
+    10, '00000000-0000-0000-0000-0000000007cf', 'd4', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-000000000450"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\": \"old\"}, {\"Id\": \"new\"}]"}]}),
+    10, '00000000-0000-0000-0000-000000000451', 'd5', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-000000000451"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"malformed","NewValue":"[{\"Id\": \"old\"}, {\"Id\": \"new\"}]"}]}),
+    10, '00000000-0000-0000-0000-000000000452', 'd6', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-000000000452"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\": \"old\"}, {\"Id\": \"new\"}]"}]}),
+    10, '00000000-0000-0000-0000-000000000453', 'd7', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-000000000453"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\":\"\"}]"}]}),
+    10, '00000000-0000-0000-0000-000000000454', 'd8', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-000000000454"},{"ID":"User_00000000-0000-0000-0000-000000000454"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\": \"old\"}, {\"Id\": \"new\"}]"}]}),
+    10, '00000000-0000-0000-0000-000000000455', 'd9', 'Update user.', dynamic({"Workload":"AzureActiveDirectory","ResultStatus":"Success","Target":[{"ID":"User_00000000-0000-0000-0000-000000000455"}],"ModifiedProperties":[{"Name":"StrongAuthenticationPhoneAppDetail","OldValue":"[{\"Id\": \"old\"}]","NewValue":"[{\"Id\": \"old\"}, {\"Id\": \"new\"}]"}]})
+] | extend Timestamp=now()-Age*1m;
+let Actual = () {
+let Lookback = 4h;
+let CorrelationWindow = 2h;
+let EmissionWindow = 2h;
+let ExcludedUserIds = dynamic([]);
+let RiskySignIns = EntraIdSignInEvents
+    | where Timestamp > ago(Lookback) and Timestamp <= now()
+    | where ErrorCode == 0 and RiskLevelDuringSignIn in (50, 100)
+    | extend JoinUserId = tolower(AccountObjectId)
+    | where isnotempty(JoinUserId)
+    | project JoinUserId, SignInTime = Timestamp, NativeRiskLevel = RiskLevelDuringSignIn,
+        SignInIPAddress = IPAddress, SignInCorrelationId = CorrelationId;
+CloudAppEvents
+| where Timestamp > ago(EmissionWindow) and Timestamp <= now()
+| where ActionType == "Update user." and tostring(RawEventData.Workload) == "AzureActiveDirectory"
+| where tostring(RawEventData.ResultStatus) =~ "Success"
+| where isnotempty(AccountObjectId) and isnotempty(ReportId)
+| mv-expand Target = RawEventData.Target
+| extend TargetUserId = tolower(extract(@"^User_([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$", 1,
+    coalesce(tostring(Target.ID), tostring(Target.Id))))
+| where isnotempty(TargetUserId) and TargetUserId == tolower(AccountObjectId)
+| where TargetUserId !in (ExcludedUserIds)
+| mv-expand Property = RawEventData.ModifiedProperties
+| where tostring(Property.Name) == "StrongAuthenticationPhoneAppDetail"
+| extend OldDevices = iff(isempty(tostring(Property.OldValue)), dynamic([]), parse_json(tostring(Property.OldValue))),
+    NewDevices = parse_json(tostring(Property.NewValue))
+| where gettype(OldDevices) == "array" and gettype(NewDevices) == "array"
+| mv-apply OldDevice = array_concat(OldDevices, dynamic([{}])) on (
+    summarize OldMethodIds = make_set(tolower(tostring(OldDevice.Id)), 128)
+)
+| mv-expand NewDevice = NewDevices
+| extend NewMethodId = tolower(tostring(NewDevice.Id))
+| where isnotempty(NewMethodId) and NewMethodId !in (OldMethodIds)
+| extend JoinUserId = TargetUserId
+| join kind=inner RiskySignIns on JoinUserId
+| where SignInTime <= Timestamp and Timestamp - SignInTime <= CorrelationWindow
+| summarize arg_max(SignInTime, *) by Timestamp, ReportId, AccountObjectId
+| project Timestamp, ReportId, AccountObjectId, SignInTime, NativeRiskLevel,
+    SignInIPAddress, SignInCorrelationId, NewMethodId,
+    Evidence = "Risky successful sign-in followed by self-attributed phone-app method ID addition"
+
+| project ReportId
+};
+let Expected = datatable(ReportId:string)[
+    'd1',
+    'd2',
+    'd8'
+];
+Actual() | extend Source='actual'
+| union (Expected | extend Source='expected')
+| summarize Actual=countif(Source == 'actual'), Expected=countif(Source == 'expected') by ReportId
+| extend Passed=Actual == Expected
+| order by Passed asc, ReportId asc

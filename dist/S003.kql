@@ -1,0 +1,41 @@
+let QueryLookback = 4h;
+let CorrelationWindow = 2h;
+let EmissionWindow = 2h;
+let ExcludedUserIds = dynamic([]);
+let MethodRegistrations = materialize(
+    AuditLogs
+    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()
+    | where Result =~ "success"
+    | where OperationName in~ ("User registered security info", "User registered security information")
+    | mv-expand Target = TargetResources
+    | where tostring(Target.type) =~ "User"
+    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(tostring(Target.id)),
+        TargetUPN = tolower(tostring(Target.userPrincipalName)),
+        MethodTime = TimeGenerated, MethodEventId = tostring(Id),
+        ActorUserId = tolower(tostring(InitiatedBy.user.id)),
+        ActorUPN = tostring(InitiatedBy.user.userPrincipalName),
+        MethodIPAddress = tostring(InitiatedBy.user.ipAddress)
+    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId) and isnotempty(MethodEventId)
+    | where TargetUserId !in (ExcludedUserIds)
+    | project EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId,
+        ActorUserId, ActorUPN, MethodIPAddress, MethodOperation = OperationName
+    | distinct *
+);
+let RiskySignIns = SigninLogs
+    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()
+    | where tostring(ResultType) == "0" and RiskLevelDuringSignIn in~ ("medium", "high")
+    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(UserId)
+    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId)
+    | project EntraTenantId, TargetUserId, SignInTime = TimeGenerated,
+        SignInId = tostring(Id), SignInIPAddress = IPAddress,
+        NativeRiskLevel = RiskLevelDuringSignIn;
+MethodRegistrations
+| where MethodTime > ago(EmissionWindow)
+| join kind=inner RiskySignIns on EntraTenantId, TargetUserId
+| where SignInTime <= MethodTime and MethodTime - SignInTime <= CorrelationWindow
+| summarize arg_max(SignInTime, *) by EntraTenantId, TargetUserId, MethodEventId
+| extend TimeGenerated = MethodTime, AccountObjectId = TargetUserId,
+    IPAddress = SignInIPAddress, AlertKey = strcat("S003:", EntraTenantId, ":", MethodEventId)
+| project TimeGenerated, EntraTenantId, AccountObjectId, TargetUPN, IPAddress,
+    SignInTime, SignInId, NativeRiskLevel, MethodTime, MethodEventId,
+    ActorUserId, ActorUPN, MethodIPAddress, MethodOperation, AlertKey

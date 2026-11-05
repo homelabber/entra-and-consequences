@@ -1,0 +1,39 @@
+let Lookback = 4h;
+let CorrelationWindow = 2h;
+let EmissionWindow = 2h;
+let ExcludedUserIds = dynamic([]);
+let RiskySignIns = EntraIdSignInEvents
+    | where Timestamp > ago(Lookback) and Timestamp <= now()
+    | where ErrorCode == 0 and RiskLevelDuringSignIn in (50, 100)
+    | extend JoinUserId = tolower(AccountObjectId)
+    | where isnotempty(JoinUserId)
+    | project JoinUserId, SignInTime = Timestamp, NativeRiskLevel = RiskLevelDuringSignIn,
+        SignInIPAddress = IPAddress, SignInCorrelationId = CorrelationId;
+CloudAppEvents
+| where Timestamp > ago(EmissionWindow) and Timestamp <= now()
+| where ActionType == "Update user." and tostring(RawEventData.Workload) == "AzureActiveDirectory"
+| where tostring(RawEventData.ResultStatus) =~ "Success"
+| where isnotempty(AccountObjectId) and isnotempty(ReportId)
+| mv-expand Target = RawEventData.Target
+| extend TargetUserId = tolower(extract(@"^User_([a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})$", 1,
+    coalesce(tostring(Target.ID), tostring(Target.Id))))
+| where isnotempty(TargetUserId) and TargetUserId == tolower(AccountObjectId)
+| where TargetUserId !in (ExcludedUserIds)
+| mv-expand Property = RawEventData.ModifiedProperties
+| where tostring(Property.Name) == "StrongAuthenticationPhoneAppDetail"
+| extend OldDevices = iff(isempty(tostring(Property.OldValue)), dynamic([]), parse_json(tostring(Property.OldValue))),
+    NewDevices = parse_json(tostring(Property.NewValue))
+| where gettype(OldDevices) == "array" and gettype(NewDevices) == "array"
+| mv-apply OldDevice = array_concat(OldDevices, dynamic([{}])) on (
+    summarize OldMethodIds = make_set(tolower(tostring(OldDevice.Id)), 128)
+)
+| mv-expand NewDevice = NewDevices
+| extend NewMethodId = tolower(tostring(NewDevice.Id))
+| where isnotempty(NewMethodId) and NewMethodId !in (OldMethodIds)
+| extend JoinUserId = TargetUserId
+| join kind=inner RiskySignIns on JoinUserId
+| where SignInTime <= Timestamp and Timestamp - SignInTime <= CorrelationWindow
+| summarize arg_max(SignInTime, *) by Timestamp, ReportId, AccountObjectId
+| project Timestamp, ReportId, AccountObjectId, SignInTime, NativeRiskLevel,
+    SignInIPAddress, SignInCorrelationId, NewMethodId,
+    Evidence = "Risky successful sign-in followed by self-attributed phone-app method ID addition"

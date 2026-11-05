@@ -1,0 +1,71 @@
+{
+  "name": "Entra and Consequences",
+  "version": "0.1.0",
+  "assessedOn": "2026-11-05",
+  "status": "offline-validated; tenant validation required",
+  "rules": [
+    {
+      "id": "S001",
+      "guid": "ed807d19-e920-49ad-aaed-655ea1915301",
+      "name": "Entra sequence - device-code sign-in then security-method registration",
+      "query": "S001-device-code-method.kql",
+      "tables": ["SigninLogs", "AuditLogs"],
+      "severity": "Medium",
+      "tactics": ["InitialAccess", "Persistence"],
+      "techniques": ["T1078", "T1098"],
+      "description": "Successful device-code sign-in followed within two hours by successful individual-method registration for the same directory and target user. Identity/time correlation, not proof of phishing or same-session activity. Legitimate onboarding is a known false positive.",
+      "deployParameter": "deployDeviceCodeRule",
+      "details": {"AlertKey": "AlertKey", "MethodEventId": "MethodEventId", "SignInId": "SignInId", "EntraTenantId": "EntraTenantId"},
+      "ipEntity": true,
+      "nativeOverlap": ["anomalousToken", "attackerinTheMiddle", "suspiciousCredentialAddition"],
+      "coverageClassification": "candidate correlation; native overlap present; absence not proven"
+    },
+    {
+      "id": "S002",
+      "guid": "ed807d19-e920-49ad-aaed-655ea1915302",
+      "name": "Entra sequence - security-method registration then multi-surface Graph reads",
+      "query": "S002-method-graph.kql",
+      "tables": ["AuditLogs", "MicrosoftGraphActivityLogs"],
+      "severity": "Medium",
+      "tactics": ["Persistence", "Discovery"],
+      "techniques": ["T1098", "T1087"],
+      "description": "Successful individual-method registration followed within two hours by at least 25 distinct successful GET requests across at least three Graph resource surfaces, by the same directory/user/application. Reads can be benign; this does not establish content download or exfiltration.",
+      "deployParameter": "deployGraphRule",
+      "details": {"AlertKey": "AlertKey", "MethodEventId": "MethodEventId", "GraphAppId": "GraphAppId", "RequestCount": "RequestCount", "Surfaces": "Surfaces", "EntraTenantId": "EntraTenantId"},
+      "ipEntity": false,
+      "nativeOverlap": ["suspiciousCredentialAddition", "suspiciousAPITraffic", "app governance behavioral detections"],
+      "coverageClassification": "candidate correlation; native overlap present; absence not proven"
+    },
+    {
+      "id": "S003",
+      "guid": "ed807d19-e920-49ad-aaed-655ea1915303",
+      "name": "Entra sequence - native risky sign-in then security-method registration",
+      "query": "S003-risk-method.kql",
+      "tables": ["SigninLogs", "AuditLogs"],
+      "severity": "Medium",
+      "tactics": ["Persistence"],
+      "techniques": ["T1098"],
+      "description": "Successful medium/high native-risk sign-in followed within two hours by successful individual-method registration for the same directory/user. Enriches existing Microsoft risk evidence; not a new token detector. Choose this or overlapping Defender D001 for alerting, not both without a deduplication plan.",
+      "deployParameter": "deployRiskRule",
+      "details": {"AlertKey": "AlertKey", "MethodEventId": "MethodEventId", "SignInId": "SignInId", "NativeRiskLevel": "NativeRiskLevel", "EntraTenantId": "EntraTenantId"},
+      "ipEntity": true,
+      "nativeOverlap": ["suspiciousCredentialAddition", "all qualifying native sign-in risks", "D001"],
+      "coverageClassification": "native-risk enrichment; not a claimed coverage gap"
+    }
+  ],
+  "defender": [
+    {
+      "id": "D001",
+      "query": "D001-risk-phoneapp-addition.kql",
+      "name": "Entra native risky sign-in then self-attributed phone-app method addition",
+      "frequency": "1 hour",
+      "lookback": "4 hours",
+      "severity": "Medium",
+      "tables": ["EntraIdSignInEvents", "CloudAppEvents"],
+      "eventColumns": ["Timestamp", "ReportId"],
+      "entityColumn": "AccountObjectId",
+      "overlaps": ["S003", "suspiciousCredentialAddition"],
+      "limitations": "Same-tenant Defender data only. Strict User_GUID target format, actor=target, and array-shaped StrongAuthenticationPhoneAppDetail required. Does not cover all authentication methods or service-mediated updates. No automatic response. Manual portal creation only after query validation."
+    }
+  ]
+}

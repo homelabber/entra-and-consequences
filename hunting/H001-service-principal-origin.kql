@@ -1,0 +1,27 @@
+let BaselineWindow = 14d;
+let ChangeWindow = 1d;
+let CorrelationWindow = 2h;
+let CredentialChanges = AuditLogs
+    | where TimeGenerated > ago(ChangeWindow) and Result =~ "success"
+    | mv-expand Target = TargetResources
+    | where tostring(Target.type) =~ "ServicePrincipal"
+    | mv-expand Property = Target.modifiedProperties
+    | where tostring(Property.displayName) in~ ("KeyDescription", "keyCredentials", "passwordCredentials")
+    | where tostring(Property.oldValue) != tostring(Property.newValue)
+    | extend EntraTenantId = tolower(AADTenantId), PrincipalObjectId = tolower(tostring(Target.id))
+    | where isnotempty(EntraTenantId) and isnotempty(PrincipalObjectId)
+    | project EntraTenantId, PrincipalObjectId, ChangeTime = TimeGenerated,
+        ChangeId = tostring(Id), OperationName,
+        CredentialProperty = tostring(Property.displayName);
+let Origins = AADServicePrincipalSignInLogs
+    | where TimeGenerated > ago(BaselineWindow) and tostring(ResultType) == "0"
+    | extend EntraTenantId = tolower(AADTenantId), PrincipalObjectId = tolower(ServicePrincipalId)
+    | where isnotempty(EntraTenantId) and isnotempty(PrincipalObjectId) and isnotempty(IPAddress)
+    | summarize FirstObservedSignIn = min(TimeGenerated), LastObservedSignIn = max(TimeGenerated)
+        by EntraTenantId, PrincipalObjectId, IPAddress, AppId;
+CredentialChanges
+| join kind=inner Origins on EntraTenantId, PrincipalObjectId
+| where FirstObservedSignIn >= ChangeTime and FirstObservedSignIn - ChangeTime <= CorrelationWindow
+| project ChangeTime, FirstObservedSignIn, LastObservedSignIn, EntraTenantId,
+    PrincipalObjectId, AppId, IPAddress, ChangeId, OperationName, CredentialProperty,
+    Evidence = "Credential metadata changed; origin first observed within available 14-day sign-in history. Credential use is not proven."

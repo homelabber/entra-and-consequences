@@ -1,0 +1,19 @@
+let MethodRegistrations = materialize(
+    AuditLogs
+    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()
+    | where Result =~ "success"
+    | where OperationName in~ ("User registered security info", "User registered security information")
+    | mv-expand Target = TargetResources
+    | where tostring(Target.type) =~ "User"
+    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(tostring(Target.id)),
+        TargetUPN = tolower(tostring(Target.userPrincipalName)),
+        MethodTime = TimeGenerated, MethodEventId = tostring(Id),
+        ActorUserId = tolower(tostring(InitiatedBy.user.id)),
+        ActorUPN = tostring(InitiatedBy.user.userPrincipalName),
+        MethodIPAddress = tostring(InitiatedBy.user.ipAddress)
+    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId) and isnotempty(MethodEventId)
+    | where TargetUserId !in (ExcludedUserIds)
+    | project EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId,
+        ActorUserId, ActorUPN, MethodIPAddress, MethodOperation = OperationName
+    | distinct *
+);

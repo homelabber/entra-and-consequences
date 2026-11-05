@@ -1,0 +1,262 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing Sentinel-enabled Log Analytics workspace in this resource group."
+      }
+    },
+    "enableRules": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Leave false until schema, overlap and tenant-data validation are complete."
+      }
+    },
+    "deployDeviceCodeRule": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "deployGraphRule": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Requires MicrosoftGraphActivityLogs on the Analytics plan."
+      }
+    },
+    "deployRiskRule": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Alternative to overlapping Defender D001; requires native risk visibility."
+      }
+    }
+  },
+  "resources": [
+    {
+      "condition": "[parameters('deployDeviceCodeRule')]",
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2024-03-01",
+      "kind": "Scheduled",
+      "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/ed807d19-e920-49ad-aaed-655ea1915301')]",
+      "properties": {
+        "displayName": "Entra sequence - device-code sign-in then security-method registration",
+        "description": "Successful device-code sign-in followed within two hours by successful individual-method registration for the same directory and target user. Identity/time correlation, not proof of phishing or same-session activity. Legitimate onboarding is a known false positive.",
+        "enabled": "[parameters('enableRules')]",
+        "severity": "Medium",
+        "query": "let QueryLookback = 4h;\nlet CorrelationWindow = 2h;\nlet EmissionWindow = 2h;\nlet ExcludedUserIds = dynamic([]);\nlet MethodRegistrations = materialize(\n    AuditLogs\n    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()\n    | where Result =~ \"success\"\n    | where OperationName in~ (\"User registered security info\", \"User registered security information\")\n    | mv-expand Target = TargetResources\n    | where tostring(Target.type) =~ \"User\"\n    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(tostring(Target.id)),\n        TargetUPN = tolower(tostring(Target.userPrincipalName)),\n        MethodTime = TimeGenerated, MethodEventId = tostring(Id),\n        ActorUserId = tolower(tostring(InitiatedBy.user.id)),\n        ActorUPN = tostring(InitiatedBy.user.userPrincipalName),\n        MethodIPAddress = tostring(InitiatedBy.user.ipAddress)\n    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId) and isnotempty(MethodEventId)\n    | where TargetUserId !in (ExcludedUserIds)\n    | project EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId,\n        ActorUserId, ActorUPN, MethodIPAddress, MethodOperation = OperationName\n    | distinct *\n);\nlet DeviceCodeSignIns = SigninLogs\n    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()\n    | where tostring(ResultType) == \"0\" and AuthenticationProtocol =~ \"deviceCode\"\n    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(UserId)\n    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId)\n    | project EntraTenantId, TargetUserId, SignInTime = TimeGenerated,\n        SignInId = tostring(Id), SignInIPAddress = IPAddress, ClientAppId = AppId;\nMethodRegistrations\n| where MethodTime > ago(EmissionWindow)\n| join kind=inner DeviceCodeSignIns on EntraTenantId, TargetUserId\n| where SignInTime <= MethodTime and MethodTime - SignInTime <= CorrelationWindow\n| summarize arg_max(SignInTime, *) by EntraTenantId, TargetUserId, MethodEventId\n| extend TimeGenerated = MethodTime, AccountObjectId = TargetUserId,\n    IPAddress = SignInIPAddress, AlertKey = strcat(\"S001:\", EntraTenantId, \":\", MethodEventId)\n| project TimeGenerated, EntraTenantId, AccountObjectId, TargetUPN, IPAddress,\n    SignInTime, SignInId, ClientAppId, MethodTime, MethodEventId,\n    ActorUserId, ActorUPN, MethodIPAddress, MethodOperation, AlertKey\n",
+        "queryFrequency": "PT1H",
+        "queryPeriod": "PT4H",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionEnabled": false,
+        "suppressionDuration": "PT1H",
+        "tactics": [
+          "InitialAccess",
+          "Persistence"
+        ],
+        "techniques": [
+          "T1078",
+          "T1098"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "Account",
+            "fieldMappings": [
+              {
+                "identifier": "AadUserId",
+                "columnName": "AccountObjectId"
+              },
+              {
+                "identifier": "AadTenantId",
+                "columnName": "EntraTenantId"
+              }
+            ]
+          },
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "IPAddress"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "AlertKey": "AlertKey",
+          "MethodEventId": "MethodEventId",
+          "SignInId": "SignInId",
+          "EntraTenantId": "EntraTenantId"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT4H",
+            "matchingMethod": "Selected",
+            "groupByEntities": [
+              "Account"
+            ],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": [
+              "EntraTenantId"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('deployGraphRule')]",
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2024-03-01",
+      "kind": "Scheduled",
+      "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/ed807d19-e920-49ad-aaed-655ea1915302')]",
+      "properties": {
+        "displayName": "Entra sequence - security-method registration then multi-surface Graph reads",
+        "description": "Successful individual-method registration followed within two hours by at least 25 distinct successful GET requests across at least three Graph resource surfaces, by the same directory/user/application. Reads can be benign; this does not establish content download or exfiltration.",
+        "enabled": "[parameters('enableRules')]",
+        "severity": "Medium",
+        "query": "let QueryLookback = 4h;\nlet CorrelationWindow = 2h;\nlet EmissionWindow = 2h;\nlet MinimumRequests = 25;\nlet MinimumSurfaces = 3;\nlet ExcludedUserIds = dynamic([]);\nlet ExcludedAppIds = dynamic([]);\nlet MethodRegistrations = materialize(\n    AuditLogs\n    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()\n    | where Result =~ \"success\"\n    | where OperationName in~ (\"User registered security info\", \"User registered security information\")\n    | mv-expand Target = TargetResources\n    | where tostring(Target.type) =~ \"User\"\n    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(tostring(Target.id)),\n        TargetUPN = tolower(tostring(Target.userPrincipalName)),\n        MethodTime = TimeGenerated, MethodEventId = tostring(Id),\n        ActorUserId = tolower(tostring(InitiatedBy.user.id)),\n        ActorUPN = tostring(InitiatedBy.user.userPrincipalName),\n        MethodIPAddress = tostring(InitiatedBy.user.ipAddress)\n    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId) and isnotempty(MethodEventId)\n    | where TargetUserId !in (ExcludedUserIds)\n    | project EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId,\n        ActorUserId, ActorUPN, MethodIPAddress, MethodOperation = OperationName\n    | distinct *\n);\nlet GraphReads = MicrosoftGraphActivityLogs\n    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()\n    | where RequestMethod =~ \"GET\" and ResponseStatusCode between (200 .. 299)\n    | extend EntraTenantId = tolower(AadTenantId), TargetUserId = tolower(UserId),\n        GraphAppId = tolower(AppId), GraphTime = TimeGenerated,\n        RequestPath = tolower(tostring(parse_url(RequestUri).Path))\n    | extend Surface = extract(@\"^/(?:v1\\.0|beta)/(users|groups|rolemanagement|applications|serviceprincipals|sites|drives)(?:/|$)\", 1, RequestPath)\n    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId)\n        and isnotempty(GraphAppId) and isnotempty(RequestId) and isnotempty(Surface)\n    | where GraphAppId !in (ExcludedAppIds)\n    | project EntraTenantId, TargetUserId, GraphAppId, GraphTime, Surface,\n        RequestId, GraphIPAddress = IPAddress;\nMethodRegistrations\n| join kind=inner GraphReads on EntraTenantId, TargetUserId\n| where GraphTime >= MethodTime and GraphTime - MethodTime <= CorrelationWindow\n| summarize FirstGraphTime = min(GraphTime), LastGraphTime = max(GraphTime),\n    RequestCount = count_distinct(RequestId), SurfaceCount = count_distinct(Surface),\n    Surfaces = make_set(Surface, 10), GraphIPAddresses = make_set(GraphIPAddress, 20)\n    by EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId, GraphAppId\n| where RequestCount >= MinimumRequests and SurfaceCount >= MinimumSurfaces\n| where LastGraphTime > ago(EmissionWindow)\n| extend TimeGenerated = LastGraphTime, AccountObjectId = TargetUserId,\n    AlertKey = strcat(\"S002:\", EntraTenantId, \":\", MethodEventId, \":\", GraphAppId)\n| project TimeGenerated, EntraTenantId, AccountObjectId, TargetUPN, MethodTime,\n    MethodEventId, GraphAppId, FirstGraphTime, LastGraphTime, RequestCount,\n    SurfaceCount, Surfaces, GraphIPAddresses, AlertKey\n",
+        "queryFrequency": "PT1H",
+        "queryPeriod": "PT4H",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionEnabled": false,
+        "suppressionDuration": "PT1H",
+        "tactics": [
+          "Persistence",
+          "Discovery"
+        ],
+        "techniques": [
+          "T1098",
+          "T1087"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "Account",
+            "fieldMappings": [
+              {
+                "identifier": "AadUserId",
+                "columnName": "AccountObjectId"
+              },
+              {
+                "identifier": "AadTenantId",
+                "columnName": "EntraTenantId"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "AlertKey": "AlertKey",
+          "MethodEventId": "MethodEventId",
+          "GraphAppId": "GraphAppId",
+          "RequestCount": "RequestCount",
+          "Surfaces": "Surfaces",
+          "EntraTenantId": "EntraTenantId"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT4H",
+            "matchingMethod": "Selected",
+            "groupByEntities": [
+              "Account"
+            ],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": [
+              "EntraTenantId"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('deployRiskRule')]",
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2024-03-01",
+      "kind": "Scheduled",
+      "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/ed807d19-e920-49ad-aaed-655ea1915303')]",
+      "properties": {
+        "displayName": "Entra sequence - native risky sign-in then security-method registration",
+        "description": "Successful medium/high native-risk sign-in followed within two hours by successful individual-method registration for the same directory/user. Enriches existing Microsoft risk evidence; not a new token detector. Choose this or overlapping Defender D001 for alerting, not both without a deduplication plan.",
+        "enabled": "[parameters('enableRules')]",
+        "severity": "Medium",
+        "query": "let QueryLookback = 4h;\nlet CorrelationWindow = 2h;\nlet EmissionWindow = 2h;\nlet ExcludedUserIds = dynamic([]);\nlet MethodRegistrations = materialize(\n    AuditLogs\n    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()\n    | where Result =~ \"success\"\n    | where OperationName in~ (\"User registered security info\", \"User registered security information\")\n    | mv-expand Target = TargetResources\n    | where tostring(Target.type) =~ \"User\"\n    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(tostring(Target.id)),\n        TargetUPN = tolower(tostring(Target.userPrincipalName)),\n        MethodTime = TimeGenerated, MethodEventId = tostring(Id),\n        ActorUserId = tolower(tostring(InitiatedBy.user.id)),\n        ActorUPN = tostring(InitiatedBy.user.userPrincipalName),\n        MethodIPAddress = tostring(InitiatedBy.user.ipAddress)\n    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId) and isnotempty(MethodEventId)\n    | where TargetUserId !in (ExcludedUserIds)\n    | project EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId,\n        ActorUserId, ActorUPN, MethodIPAddress, MethodOperation = OperationName\n    | distinct *\n);\nlet RiskySignIns = SigninLogs\n    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()\n    | where tostring(ResultType) == \"0\" and RiskLevelDuringSignIn in~ (\"medium\", \"high\")\n    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(UserId)\n    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId)\n    | project EntraTenantId, TargetUserId, SignInTime = TimeGenerated,\n        SignInId = tostring(Id), SignInIPAddress = IPAddress,\n        NativeRiskLevel = RiskLevelDuringSignIn;\nMethodRegistrations\n| where MethodTime > ago(EmissionWindow)\n| join kind=inner RiskySignIns on EntraTenantId, TargetUserId\n| where SignInTime <= MethodTime and MethodTime - SignInTime <= CorrelationWindow\n| summarize arg_max(SignInTime, *) by EntraTenantId, TargetUserId, MethodEventId\n| extend TimeGenerated = MethodTime, AccountObjectId = TargetUserId,\n    IPAddress = SignInIPAddress, AlertKey = strcat(\"S003:\", EntraTenantId, \":\", MethodEventId)\n| project TimeGenerated, EntraTenantId, AccountObjectId, TargetUPN, IPAddress,\n    SignInTime, SignInId, NativeRiskLevel, MethodTime, MethodEventId,\n    ActorUserId, ActorUPN, MethodIPAddress, MethodOperation, AlertKey\n",
+        "queryFrequency": "PT1H",
+        "queryPeriod": "PT4H",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionEnabled": false,
+        "suppressionDuration": "PT1H",
+        "tactics": [
+          "Persistence"
+        ],
+        "techniques": [
+          "T1098"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "Account",
+            "fieldMappings": [
+              {
+                "identifier": "AadUserId",
+                "columnName": "AccountObjectId"
+              },
+              {
+                "identifier": "AadTenantId",
+                "columnName": "EntraTenantId"
+              }
+            ]
+          },
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "IPAddress"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "AlertKey": "AlertKey",
+          "MethodEventId": "MethodEventId",
+          "SignInId": "SignInId",
+          "NativeRiskLevel": "NativeRiskLevel",
+          "EntraTenantId": "EntraTenantId"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT4H",
+            "matchingMethod": "Selected",
+            "groupByEntities": [
+              "Account"
+            ],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": [
+              "EntraTenantId"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

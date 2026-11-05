@@ -1,0 +1,52 @@
+let QueryLookback = 4h;
+let CorrelationWindow = 2h;
+let EmissionWindow = 2h;
+let MinimumRequests = 25;
+let MinimumSurfaces = 3;
+let ExcludedUserIds = dynamic([]);
+let ExcludedAppIds = dynamic([]);
+let MethodRegistrations = materialize(
+    AuditLogs
+    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()
+    | where Result =~ "success"
+    | where OperationName in~ ("User registered security info", "User registered security information")
+    | mv-expand Target = TargetResources
+    | where tostring(Target.type) =~ "User"
+    | extend EntraTenantId = tolower(AADTenantId), TargetUserId = tolower(tostring(Target.id)),
+        TargetUPN = tolower(tostring(Target.userPrincipalName)),
+        MethodTime = TimeGenerated, MethodEventId = tostring(Id),
+        ActorUserId = tolower(tostring(InitiatedBy.user.id)),
+        ActorUPN = tostring(InitiatedBy.user.userPrincipalName),
+        MethodIPAddress = tostring(InitiatedBy.user.ipAddress)
+    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId) and isnotempty(MethodEventId)
+    | where TargetUserId !in (ExcludedUserIds)
+    | project EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId,
+        ActorUserId, ActorUPN, MethodIPAddress, MethodOperation = OperationName
+    | distinct *
+);
+let GraphReads = MicrosoftGraphActivityLogs
+    | where TimeGenerated > ago(QueryLookback) and TimeGenerated <= now()
+    | where RequestMethod =~ "GET" and ResponseStatusCode between (200 .. 299)
+    | extend EntraTenantId = tolower(AadTenantId), TargetUserId = tolower(UserId),
+        GraphAppId = tolower(AppId), GraphTime = TimeGenerated,
+        RequestPath = tolower(tostring(parse_url(RequestUri).Path))
+    | extend Surface = extract(@"^/(?:v1\.0|beta)/(users|groups|rolemanagement|applications|serviceprincipals|sites|drives)(?:/|$)", 1, RequestPath)
+    | where isnotempty(EntraTenantId) and isnotempty(TargetUserId)
+        and isnotempty(GraphAppId) and isnotempty(RequestId) and isnotempty(Surface)
+    | where GraphAppId !in (ExcludedAppIds)
+    | project EntraTenantId, TargetUserId, GraphAppId, GraphTime, Surface,
+        RequestId, GraphIPAddress = IPAddress;
+MethodRegistrations
+| join kind=inner GraphReads on EntraTenantId, TargetUserId
+| where GraphTime >= MethodTime and GraphTime - MethodTime <= CorrelationWindow
+| summarize FirstGraphTime = min(GraphTime), LastGraphTime = max(GraphTime),
+    RequestCount = count_distinct(RequestId), SurfaceCount = count_distinct(Surface),
+    Surfaces = make_set(Surface, 10), GraphIPAddresses = make_set(GraphIPAddress, 20)
+    by EntraTenantId, TargetUserId, TargetUPN, MethodTime, MethodEventId, GraphAppId
+| where RequestCount >= MinimumRequests and SurfaceCount >= MinimumSurfaces
+| where LastGraphTime > ago(EmissionWindow)
+| extend TimeGenerated = LastGraphTime, AccountObjectId = TargetUserId,
+    AlertKey = strcat("S002:", EntraTenantId, ":", MethodEventId, ":", GraphAppId)
+| project TimeGenerated, EntraTenantId, AccountObjectId, TargetUPN, MethodTime,
+    MethodEventId, GraphAppId, FirstGraphTime, LastGraphTime, RequestCount,
+    SurfaceCount, Surfaces, GraphIPAddresses, AlertKey
