@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-{{SCRIPT_HASH}}'; style-src 'sha256-{{STYLE_HASH}}'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Entra and Consequences · Offline investigation</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#131f33;--ink:#edf3fc;--muted:#b0c0d6;--line:#344660;--accent:#77e1cd;--warn:#ffdb91}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}main{max-width:1480px;margin:auto;padding:32px}h1{font-size:clamp(28px,4vw,48px);line-height:1.15;margin:10px 0}h2{font-size:21px;margin:0 0 12px}p{margin:8px 0}.eyebrow{color:var(--accent);font-size:12px;letter-spacing:.14em;text-transform:uppercase}.muted,.meta{color:var(--muted)}.notice{border-left:4px solid var(--warn);background:#292536;padding:14px 18px;margin:20px 0}.demo{color:var(--warn);font-weight:700}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0}.card,.panel,.filters{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}.number{font-size:32px;font-weight:750;color:var(--accent)}.filters{display:flex;flex-wrap:wrap;gap:14px;align-items:end}.filters label{display:flex;flex:1 1 180px;flex-direction:column;gap:6px;font-size:13px}input,select,button{font:inherit;color:var(--ink);background:#0c1728;border:1px solid #7187a5;border-radius:6px;padding:9px;max-width:100%}button{cursor:pointer}button:hover{border-color:var(--accent)}button:disabled{opacity:.5;cursor:default}:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.panel{margin:18px 0}.table-wrap{overflow:auto;max-height:560px;margin-top:12px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:10px;min-width:130px;max-width:480px;white-space:pre-wrap;overflow-wrap:anywhere}th{position:sticky;top:0;background:#1d2e48}.pager{display:flex;align-items:center;gap:12px;margin-top:12px}.pager span{flex:1}.status{color:var(--warn)}svg{width:100%;height:auto;max-height:280px}.bar{fill:var(--accent)}.chart-label{fill:var(--muted);font-size:11px}.chart-count{fill:var(--ink);font-size:12px}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}footer{margin:28px 0;color:var(--muted);font-size:13px}[hidden]{display:none!important}@media(max-width:650px){main{padding:16px}.panel{padding:12px}.filters label{flex-basis:100%}}@media print{:root{color-scheme:light;--bg:white;--panel:white;--ink:black;--muted:#333;--line:#aaa;--accent:#145c4c}body{font-size:11px}.filters,button{display:none}.notice{background:white}.table-wrap{max-height:none;overflow:visible}th{position:static;background:white}main{padding:0}.panel{break-inside:avoid}td,th{min-width:0;max-width:200px}.pager{display:block}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="eyebrow">Identity evidence · Offline snapshot</div><h1>Entra and Consequences</h1><p>Because a successful sign-in shouldn’t be the end of the investigation.</p><p id="generated" class="meta"></p><p id="demo" class="demo" hidden>Synthetic demonstration — not tenant evidence.</p></header>
+<div class="notice"><strong>A snapshot, not a security verdict.</strong> Counts describe exported rows, not unique incidents or confirmed compromise. This file does not run detections, refresh data, query Microsoft services or prove native coverage. Missing panels mean <strong>not imported</strong>, not “all clear.” Workbook exports may contain only the latest 200 rows. Treat this HTML as sensitive as the source logs.</div>
+<noscript><p class="notice">JavaScript is required to display the embedded evidence. No data is sent over the network.</p></noscript>
+<div class="filters" aria-label="Evidence filters">
+<label>Panel<select id="panel"><option value="">All panels</option></select></label>
+<label>Directory ID<select id="tenant"><option value="">All directories</option></select></label>
+<label>Account object ID<select id="user"><option value="">All accounts</option></select></label>
+<label>Search cell text<input id="search" type="search" placeholder="Event ID, IP, application…"></label>
+<label>From (UTC, inclusive)<input id="from" type="datetime-local"></label>
+<label>Through (UTC minute, inclusive)<input id="through" type="datetime-local"></label>
+<button id="reset" type="button">Reset</button><button id="print" type="button">Print current view</button>
+</div>
+<p class="muted">Identity filters match exported immutable IDs, not inferred identities in native-alert JSON. Rows without IDs remain visible only under the corresponding “All” selection. Time filters exclude rows without a recognized timestamp. Readiness is workspace-wide and remains unfiltered.</p>
+<p id="filter-warning" class="status" role="status"></p>
+<div class="cards" aria-live="polite"><div class="card"><div>Evidence rows in view</div><div id="rows" class="number">—</div></div><div class="card"><div>S001–S003 rows in view</div><div id="matches" class="number">—</div></div><div class="card"><div>Directory/account pairs in view</div><div id="accounts" class="number">—</div></div><div class="card"><div>Datasets imported</div><div id="datasets" class="number">—</div></div></div>
+<section class="panel"><h2>Evidence over observed UTC dates</h2><p class="muted">Most recent 14 observed dates after filtering; gaps are not drawn. Multiple panels can represent the same underlying event. Readiness and untimed rows are excluded.</p><div id="timeline"></div></section>
+<div id="panels"></div>
+<footer>Generated locally by Entra and Consequences. No external scripts, fonts, telemetry or network connections. All imported cells are embedded in this file, including evidence hidden by filters or pagination. Printing includes only the currently displayed table pages. Share only through approved channels.</footer>
+</main>
+<script id="evidence-data" type="application/json">{{DATA}}</script>
+<script id="dashboard-code">
+"use strict";
+const data = JSON.parse(document.getElementById("evidence-data").textContent);
+const titles = {s001:"S001 · Device code → registration",s002:"S002 · Registration → Graph reads",s003:"S003 · Native risk → registration",registrations:"Individual method registrations",graph:"Content-oriented Graph requests",downloads:"Recorded file downloads",alerts:"Available native security alerts",readiness:"Workspace telemetry snapshot"};
+const byKey = new Map(data.panels.map(p => [p.key,p]));
+const controls = Object.fromEntries(["panel","tenant","user","search","from","through"].map(k => [k,document.getElementById(k)]));
+const pages = new Map();
+const pageSize = 50;
+function element(tag,text,className){const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;}
+function option(select,value,label){const node=element("option",label);node.value=value;select.append(node);}
+function fill(select,values,label){const previous=select.value;select.replaceChildren();option(select,"",label);[...values].filter(Boolean).sort().forEach(v=>option(select,v,v));if(values.has(previous))select.value=previous;}
+function updateIdentities(){const all=data.panels.filter(p=>p.key!=="readiness").flatMap(p=>p.rows);fill(controls.tenant,new Set(all.map(r=>r.tenant)),"All directories");fill(controls.user,new Set(all.filter(r=>!controls.tenant.value||r.tenant===controls.tenant.value).map(r=>r.user)),"All accounts");}
+Object.entries(titles).forEach(([key,title])=>option(controls.panel,key,title));
+updateIdentities();
+document.getElementById("generated").textContent="Generated "+data.generated+" · Static exported evidence, no live connection";
+document.getElementById("demo").hidden=!data.demo;
+function filtered(panel){
+  if(panel.key==="readiness")return panel.rows;
+  const needle=controls.search.value.toLowerCase();
+  const start=controls.from.value?Date.parse(controls.from.value+"Z"):null;
+  const end=controls.through.value?Date.parse(controls.through.value+"Z")+59999:null;
+  return panel.rows.filter(r=>(!controls.tenant.value||r.tenant===controls.tenant.value)&&(!controls.user.value||r.user===controls.user.value)&&(!needle||r.cells.some(c=>c.toLowerCase().includes(needle)))&&(start===null||(r.time!==null&&r.time>=start))&&(end===null||(r.time!==null&&r.time<=end)));
+}
+function drawTimeline(rows){
+  const target=document.getElementById("timeline");target.replaceChildren();
+  const counts=new Map();rows.filter(r=>r.time!==null).forEach(r=>{const day=new Date(r.time).toISOString().slice(0,10);counts.set(day,(counts.get(day)||0)+1);});
+  const bins=[...counts].sort((a,b)=>a[0].localeCompare(b[0])).slice(-14);
+  if(!bins.length){target.append(element("p","No recognized timestamps in the current view.","muted"));return;}
+  const ns="http://www.w3.org/2000/svg";
+  const svg=document.createElementNS(ns,"svg");svg.setAttribute("viewBox","0 0 1000 235");svg.setAttribute("role","img");svg.setAttribute("aria-label",bins.map(([d,n])=>d+": "+n+" rows").join("; "));
+  const maximum=Math.max(...bins.map(b=>b[1]));const step=1000/bins.length;
+  bins.forEach(([day,count],index)=>{const height=count/maximum*160;const bar=document.createElementNS(ns,"rect");Object.entries({x:index*step+12,y:185-height,width:Math.max(4,step-24),height:height,rx:4,class:"bar"}).forEach(([k,v])=>bar.setAttribute(k,String(v)));const title=document.createElementNS(ns,"title");title.textContent=day+": "+count+" rows";bar.append(title);svg.append(bar);[[String(count),175-height,"chart-count"],[day,210,"chart-label"]].forEach(([text,y,cls])=>{const label=document.createElementNS(ns,"text");label.setAttribute("x",String(index*step+step/2));label.setAttribute("y",String(y));label.setAttribute("text-anchor","middle");label.setAttribute("class",cls);label.textContent=text;svg.append(label);});});target.append(svg);
+}
+function panelView(key,panel,rows){
+  const section=element("section",undefined,"panel");section.dataset.panel=key;section.append(element("h2",titles[key]));
+  if(!panel){section.append(element("p","Not imported — no coverage or clean-state inference is possible.","status"));return section;}
+  section.append(element("p",panel.source+" · "+panel.rows.length.toLocaleString()+" imported rows · "+rows.length.toLocaleString()+" rows in view","meta"));
+  if(key==="readiness")section.append(element("p","Unfiltered workspace snapshot at export time, not current connector health.","status"));
+  if(panel.untimed)section.append(element("p",panel.untimed+" imported rows have no recognized timestamp; retained in tables unless time-filtered.","status"));
+  if(!rows.length){section.append(element("p",panel.rows.length?"No rows match the current filters.":"Header-only export: zero rows imported. This does not prove a successful query or a clean tenant.","muted"));return section;}
+  const page=Math.min(pages.get(key)||0,Math.ceil(rows.length/pageSize)-1);pages.set(key,page);
+  const table=element("table");const caption=element("caption",titles[key]+" exported evidence","sr-only");table.append(caption);const head=element("thead");const header=element("tr");panel.headers.forEach(h=>{const th=element("th",h);th.scope="col";header.append(th);});head.append(header);table.append(head);const body=element("tbody");rows.slice(page*pageSize,(page+1)*pageSize).forEach(row=>{const tr=element("tr");row.cells.forEach(cell=>tr.append(element("td",cell)));body.append(tr);});table.append(body);const wrap=element("div",undefined,"table-wrap");wrap.tabIndex=0;wrap.setAttribute("aria-label",titles[key]+" scrollable evidence");wrap.append(table);section.append(wrap);
+  const pager=element("div",undefined,"pager");pager.append(element("span","Rows "+(page*pageSize+1)+"–"+Math.min((page+1)*pageSize,rows.length)+" of "+rows.length.toLocaleString()));
+  [["Previous",-1,page===0],["Next",1,(page+1)*pageSize>=rows.length]].forEach(([label,offset,disabled])=>{const button=element("button",label);button.type="button";button.disabled=disabled;button.setAttribute("aria-label",label+" page: "+titles[key]);button.addEventListener("click",()=>{pages.set(key,page+offset);render();});pager.append(button);});section.append(pager);return section;
+}
+function render(){
+  const selected=controls.panel.value;const views=Object.keys(titles).filter(k=>!selected||k===selected).map(key=>({key,panel:byKey.get(key)})).map(v=>({...v,rows:v.panel?filtered(v.panel):[]}));
+  const evidence=views.filter(v=>v.key!=="readiness").flatMap(v=>v.rows);
+  document.getElementById("rows").textContent=evidence.length.toLocaleString();document.getElementById("matches").textContent=views.filter(v=>["s001","s002","s003"].includes(v.key)).reduce((n,v)=>n+v.rows.length,0).toLocaleString();document.getElementById("accounts").textContent=new Set(evidence.filter(r=>r.tenant&&r.user).map(r=>r.tenant+":"+r.user)).size.toLocaleString();document.getElementById("datasets").textContent=data.panels.length+" / 8";
+  const warning=document.getElementById("filter-warning");warning.textContent=controls.from.value&&controls.through.value&&controls.from.value>controls.through.value?"The start is after the end. Correct the UTC interval to see timed evidence.":"";
+  drawTimeline(evidence);document.getElementById("panels").replaceChildren(...views.map(v=>panelView(v.key,v.panel,v.rows)));document.documentElement.dataset.dashboardReady="true";
+}
+let debounce;
+Object.entries(controls).forEach(([key,node])=>node.addEventListener(key==="search"?"input":"change",()=>{if(key==="tenant")updateIdentities();pages.clear();clearTimeout(debounce);if(key==="search")debounce=setTimeout(render,150);else render();}));
+document.getElementById("reset").addEventListener("click",()=>{Object.values(controls).forEach(c=>c.value="");updateIdentities();pages.clear();render();});
+document.getElementById("print").addEventListener("click",()=>window.print());
+render();
+</script>
+</body>
+</html>

@@ -4,7 +4,7 @@
 
 Evidence-focused Microsoft Entra attack-chain investigations for Microsoft Sentinel and Defender XDR. Less déjà vu, more useful context.
 
-Version **0.1.0** · Research assessed **November 5, 2026** · **Offline package; tenant validation required**
+Version **0.2.0** · Research assessed **November 5, 2026** · **Offline package; tenant validation required**
 
 Explainable identity attack-chain correlations for Microsoft Sentinel, with one narrower Defender XDR custom-detection candidate. This supplements native evidence; it does not replace Entra ID Protection, Defender, Conditional Access, or incident investigation. No rule is advertised as a proven Microsoft product gap.
 
@@ -18,6 +18,7 @@ Explainable identity attack-chain correlations for Microsoft Sentinel, with one 
 | **D001** | Successful medium/high native-risk sign-in → self-attributed phone-app method ID addition, including replacement without a count increase | Manual Defender setup after validation; alternative to S003 |
 | **H001** | Service-principal credential metadata change → sign-in origin first observed in available 14-day history | Hunting only |
 | **Workbook** | Eight query panels: readiness, three correlations, registrations, content-oriented Graph requests, recorded downloads, available security alerts | Import/deploy separately |
+| **Offline HTML export** | Standalone dashboard from Sentinel result CSVs: evidence filters, row-count cards, UTC date chart and paginated tables | Generate locally; no uploads or live queries |
 
 **S003 and D001 overlap intentionally as alternative platforms. Do not enable both by default.** S001/S002 can also describe different stages of the same legitimate or malicious sequence; inspect native coverage before enabling either. Identity/time correlation is not proof of shared session, stolen token, malicious registration, or exfiltration.
 
@@ -26,6 +27,25 @@ Explainable identity attack-chain correlations for Microsoft Sentinel, with one 
 1. Read [coverage and research](docs/coverage.md), especially the unverified native-template comparison and raw audit-label caveat.
 2. Follow [deployment and tenant validation](docs/deployment.md). No tenant changes have been made by creating this package.
 3. Use [triage guidance](docs/triage.md) before defining response automation. The package has **no automatic response actions**.
+
+### Take the evidence offline
+
+Your evidence, without the obligatory browser tab pilgrimage. Export the suite’s Sentinel query results as CSV, then generate a self-contained dashboard:
+
+```powershell
+python -B .\tools\export_html.py --s001 '.\exports\s001.csv' --alerts '.\exports\alerts.csv' --output '.\exports\investigation.html'
+Start-Process '.\exports\investigation.html'
+```
+
+No tenant data handy? Try the clearly labelled synthetic demo:
+
+```powershell
+python -B .\tools\export_html.py --demo --output '.\exports\demo.html'
+```
+
+Supports any subset of the eight Sentinel panels. Existing output files are never overwritten. The HTML embeds all imported cells and works offline—**filters are not redaction**. Keep tenant CSVs and HTML private; the `exports` folder is Git-ignored. Counts are exported rows, not incidents, and workbook exports may contain only the latest 200 rows. This viewer neither executes detections nor replaces the Sentinel workbook.
+
+See [HTML export instructions and limitations](docs/html-export.md) for panel options, input formats, privacy and completeness checks.
 
 ### Build and local checks
 
@@ -52,6 +72,9 @@ Local checks cover deterministic packaging, JSON/Python syntax, schedule/entity 
 - `dist\workbook.arm.json`: workbook deployment with workspace binding.
 - `workbook\entra-investigation.workbook.json`: Advanced Editor workbook document; bind the workspace placeholder before direct import.
 - `dist\*-fixtures.kql`: synthetic KQL-engine checks, not production detections.
+- `tools\export_html.py`, `tools\html_dashboard.html`: offline CSV-to-HTML dashboard generator and embedded template.
+- `docs\html-export.md`: export workflow, supported columns and sensitive-evidence handling.
+- `exports`: local CSVs/HTML only; Git-ignored and never automatically published.
 - `tools`, `tests`: deterministic build and local verification.
 
 ## Operational guardrails
